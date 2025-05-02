@@ -1,0 +1,16 @@
+torch
+transformers
+datasets
+speechbrain
+librosa
+numpy
+phonemizer
+# Add moshi
+moshi
+# Add soundfile for saving audio
+soundfile
+# Add any other specific versions if needed
+# Accelerate is useful for multi-gpu/mixed precision, keep it for now
+accelerate
+# Add wandb
+wandb
