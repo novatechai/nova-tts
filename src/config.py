@@ -64,7 +64,7 @@ FREEZE_TEXT_ENCODER = True # Start with frozen text encoder
 # TRAIN_BATCH_SIZE = 16 # Using unified BATCH_SIZE now
 # VALID_BATCH_SIZE = 16 # Using unified BATCH_SIZE now
 BATCH_SIZE = 4 # KEEP THIS ONE
-EPOCHS = 2 # Keep low for testing
+EPOCHS = 25 # Keep low for testing
 
 # --- Output Directories ---
 OUTPUT_DIR = "outputs"
