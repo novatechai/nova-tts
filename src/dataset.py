@@ -67,8 +67,7 @@ class MimiTTSDataset(Dataset):
                 loaded_single_split = datasets.load_dataset(
                     self.config.DATASET_NAME, 
                     split=effective_split,
-                    keep_in_memory=True,
-                    try_from_hf_gcs=False
+                    keep_in_memory=True
                 )
                 if self.config.LOAD_LOCAL_TEST_SAMPLE:
                     sample_size = min(self.config.LOCAL_TEST_SAMPLE_SIZE, len(loaded_single_split))
@@ -245,10 +244,19 @@ def create_dataloaders(config):
     hf_train_dataset = None
     hf_val_dataset = None
 
+    # Define a local cache directory for this dataset operation
+    local_cache_dir = os.path.join(os.getcwd(), ".hf_datasets_cache_elise") # Or any path you prefer
+    os.makedirs(local_cache_dir, exist_ok=True)
+    print(f"Using local cache directory for dataset: {local_cache_dir}")
+
     print(f"Loading Hugging Face dataset: {config.DATASET_NAME}")
     try:
-        # Attempt to load all splits first
-        loaded_data = datasets.load_dataset(config.DATASET_NAME, keep_in_memory=True, try_from_hf_gcs=False)
+        # Attempt to load all splits first, using the local cache dir
+        loaded_data = datasets.load_dataset(
+            config.DATASET_NAME, 
+            keep_in_memory=True, 
+            cache_dir=local_cache_dir
+        )
         
         if isinstance(loaded_data, datasets.DatasetDict):
             if 'train' not in loaded_data:
