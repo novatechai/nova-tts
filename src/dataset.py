@@ -30,7 +30,7 @@ try:
     mimi_weights_path = hf_hub_download(mimi_repo, mimi_filename)
     print(f"Mimi weights path: {mimi_weights_path}")
 
-    mimi_device = "cpu" # Preprocessing on CPU
+    mimi_device = "cuda:0" # Preprocessing on GPU
     mimi = moshiloaders.get_mimi(filename=mimi_weights_path, device=mimi_device)
     # Update config sample rate based on loaded model
     config.MIMI_SAMPLE_RATE = mimi.sample_rate

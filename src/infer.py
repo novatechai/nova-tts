@@ -104,45 +104,45 @@ def main(args):
         logger.error(f"Error during code generator initialization: {e}", exc_info=True)
         return
 
-    # --- 5. Decode Codes to Audio (Streaming) --- #
-    logger.info("Decoding code stream using Mimi (streaming=True)...")
+    # --- 5. Decode Codes to Audio (Corrected Streaming) --- #
+    logger.info("Decoding code stream using Mimi streaming context...")
     if mimi is None:
         logger.error("Global Mimi model not loaded. Cannot decode.")
         return
         
     output_audio_chunks = []
     try:
-        # --- Collect all code chunks first --- #
-        all_code_chunks = []
-        for i, code_chunk in enumerate(code_chunk_generator):
-             logger.info(f"Generated code chunk {i+1}, shape: {code_chunk.shape}")
-             all_code_chunks.append(code_chunk)
-             
-        if not all_code_chunks:
-            logger.error("Model did not generate any code chunks.")
-            return
-            
-        # Concatenate all chunks into a single tensor
-        generated_codes_full = torch.cat(all_code_chunks, dim=-1) # [1, N, T_full]
-        logger.info(f"Full generated codes shape: {generated_codes_full.shape}")
-        
-        # Move full tensor to CPU
-        codes_to_decode = generated_codes_full.cpu()
-        # vocab_size = config.MIMI_VOCAB_SIZE # No longer needed for clamping
-        # --- Clamping Permanently REMOVED --- 
-        # --- End Clamping Removed ---
-        codes_to_decode = codes_to_decode.long()
-
-        # --- Decode the full sequence at once --- #
-        # Remove streaming context manager and argument
-        output_waveform = mimi.decode(codes_to_decode)
-        logger.info(f"Decoding complete (non-streaming). Final waveform shape: {output_waveform.shape}")
-
-        # Ensure waveform is 1D for saving
-        if output_waveform.ndim > 1:
-             output_waveform = output_waveform.squeeze()
-             
-        logger.info(f"Streaming decoding complete. Final waveform shape: {output_waveform.shape}")
+        # Use the mimi streaming context manager
+        with mimi.streaming(batch_size=1):
+            logger.info("Mimi streaming context entered.")
+            # Iterate through the code chunks yielded by our generator
+            for i, code_chunk in enumerate(code_chunk_generator):
+                logger.info(f"Processing code chunk {i+1}, shape: {code_chunk.shape}")
+                
+                # Prepare chunk for decoding (CPU, long)
+                codes_to_decode = code_chunk.cpu().long()
+                # Note: Clamping is removed, assuming model behaves
+                
+                # Decode this specific chunk
+                audio_chunk = mimi.decode(codes_to_decode)
+                logger.info(f"Decoded audio chunk {i+1}, shape: {audio_chunk.shape}")
+                
+                # Append the resulting audio chunk (move to CPU if not already)
+                if audio_chunk.numel() > 0:
+                    output_audio_chunks.append(audio_chunk.cpu())
+                else:
+                    logger.warning(f"Received empty audio chunk {i+1}.")
+                    
+        # --- Concatenate Audio Chunks --- # 
+        if not output_audio_chunks:
+            logger.error("No audio chunks were generated after decoding.")
+            output_waveform = torch.tensor([]) # Empty tensor
+        else:
+            output_waveform = torch.cat(output_audio_chunks, dim=-1) # Concatenate along time axis
+            # Ensure waveform is 1D 
+            if output_waveform.ndim > 1:
+                 output_waveform = output_waveform.squeeze()
+            logger.info(f"Streaming decoding complete. Final waveform shape: {output_waveform.shape}")
 
     except Exception as e:
         logger.error(f"Error decoding Mimi code stream: {e}", exc_info=True)
