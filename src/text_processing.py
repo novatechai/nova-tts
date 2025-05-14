@@ -126,31 +126,54 @@ class TextProcessor:
             # Return empty lists or handle differently?
             return [], []
 
-    def process(self, raw_text, phonemes=True):
+    def process(self, text_input, is_phoneme_input=False):
         """Applies the full text processing pipeline.
         
         Args:
-            raw_text (str): The input text.
-            phonemes (bool): Whether to convert to phonemes before tokenizing.
-                             Defaults to True. If False or if phonemizer failed,
-                             tokenizes normalized text directly.
+            text_input (str): The input text or a string of pre-computed phonemes.
+            is_phoneme_input (bool): If True, text_input is treated as already phonemized.
+                                     If False, text_input is treated as raw text to be normalized
+                                     and then phonemized (if phonemizer is available).
                              
         Returns:
             tuple: (input_ids (list[int]), attention_mask (list[int]))
         """
-        normalized = self._normalize_text(raw_text)
-        
-        sequence_to_tokenize = normalized
-        if phonemes and self.phonemizer:
-            phoneme_sequence = self._text_to_phonemes(normalized)
-            # Only use phonemes if phonemization didn't fallback to text
-            if phoneme_sequence != normalized: 
-                sequence_to_tokenize = phoneme_sequence
+        sequence_to_tokenize = None
+
+        if is_phoneme_input:
+            # Input is already phonemes, directly tokenize
+            # We might still want a basic whitespace collapse for safety, 
+            # or assume pre-computed phonemes are well-formed.
+            # For now, let's assume they are ready for tokenization.
+            if isinstance(text_input, str):
+                sequence_to_tokenize = text_input.strip() # Basic strip
             else:
-                print("Phonemization resulted in fallback to text, tokenizing normalized text.")
-        elif phonemes and not self.phonemizer:
-             print("Phonemizer unavailable, tokenizing normalized text.")
+                # Should not happen if type hints are followed from dataset side
+                print(f"Warning: is_phoneme_input=True but text_input is not a string: {type(text_input)}. Attempting to convert.")
+                sequence_to_tokenize = str(text_input).strip()
+            # print(f"DBG: Tokenizing pre-computed phonemes: '{sequence_to_tokenize[:100]}...'")
+        else:
+            # Input is raw text, normalize and then phonemize
+            normalized = self._normalize_text(text_input)
+            # print(f"DBG: Normalized text: '{normalized[:100]}...'")
+            
+            if self.phonemizer:
+                phoneme_sequence = self._text_to_phonemes(normalized)
+                # Only use phonemes if phonemization didn't fallback to text
+                if phoneme_sequence != normalized: 
+                    sequence_to_tokenize = phoneme_sequence
+                    # print(f"DBG: Using generated phonemes: '{sequence_to_tokenize[:100]}...'")
+                else:
+                    print("Phonemization resulted in fallback to text, tokenizing normalized text.")
+                    sequence_to_tokenize = normalized # Use normalized text
+            else:
+                print("Phonemizer unavailable, tokenizing normalized text.")
+                sequence_to_tokenize = normalized # Use normalized text
         
+        if sequence_to_tokenize is None:
+            print(f"Error: sequence_to_tokenize is None after processing input: '{str(text_input)[:100]}...'")
+            return [], []
+
         input_ids, attention_mask = self._tokenize(sequence_to_tokenize)
         
         return input_ids, attention_mask

@@ -41,21 +41,23 @@ PREPROCESS_TRAIN_AUDIO_NORMALIZE = True
 
 # --- Dataset ---
 # DATASET_NAME = "MrDragonFox/EN_Emilia_Yodas_616h"
-DATASET_NAME = "MrDragonFox/Elise" # Smaller dataset for local testing
+DATASET_NAME = "Jinsaryko/Elise"
 # DATASET_SUBSET = "Emilia-YODAS" # No longer needed, dataset IS the subset
 # DATASET_LANGUAGE = "en" # No longer needed, dataset IS English
 DATASET_TEXT_COLUMN = "text" # Column name in Elise dataset
-# DATASET_SPEAKER_COLUMN = "speaker" # Elise dataset doesn't have this column
+DATASET_SPEAKER_COLUMN = "speaker_name" # Elise dataset doesn't have this column
 DATASET_AUDIO_COLUMN = "audio"
+DATASET_PHONEMES_COLUMN = "phonemes" # Column name for pre-computed phonemes in Elise dataset
 
 # For local testing
 LOAD_LOCAL_TEST_SAMPLE = False # Set to False on H100
 LOCAL_TEST_SAMPLE_SIZE = 5 # Number of rows to load for local testing
+VALIDATION_SPLIT_PERCENTAGE = 0.1 # Percentage of train data to use for validation if no val split exists
 
 # --- Training Hyperparameters (Placeholders) ---
 # BATCH_SIZE = 4 # New batch size - REMOVED DUPLICATE HERE
 LEARNING_RATE = 1e-4
-NUM_EPOCHS = 50 # Adjust as needed
+NUM_EPOCHS = 30 # Adjust as needed
 
 # Training Configuration
 FREEZE_TEXT_ENCODER = True # Start with frozen text encoder

@@ -42,74 +42,47 @@ except Exception as e:
 
 class MimiTTSDataset(Dataset):
     """Custom PyTorch Dataset for preparing Mimi TTS training data."""
-    def __init__(self, split="train", config=config):
+    def __init__(self, config=config, split="train", hf_dataset_obj=None):
         super().__init__()
         self.config = config
-        self.split = split
+        self.split = split # Retain for logging/context if needed, but hf_dataset_obj takes precedence
         self.text_processor = TextProcessor(config)
         # Keep reference to the global mimi model for encoding
         self.mimi_model = mimi 
 
-        print(f"Loading dataset '{self.config.DATASET_NAME}'...") # Reverted print
-        # Load the dataset (potentially streaming if very large) - REVERTED TO NON-STREAMING
-        
-        effective_split = self.split
-        if self.config.LOAD_LOCAL_TEST_SAMPLE:
-            sample_size = self.config.LOCAL_TEST_SAMPLE_SIZE
-            # effective_split = f"{self.split}[:{sample_size}]" # Slice notation doesn't work well with load_dataset
-            print(f"Attempting to load only first {sample_size} samples (will slice AFTER load)")
+        if hf_dataset_obj is not None:
+            print(f"Initializing MimiTTSDataset with pre-loaded Hugging Face dataset object ({split} context). Samples: {len(hf_dataset_obj)}")
+            self.dataset = hf_dataset_obj
         else:
-             print(f"Loading full split: '{self.split}'")
-
-        try:
-            # Load the specified split (non-streaming)
-            hf_dataset = datasets.load_dataset(
-                 self.config.DATASET_NAME, 
-                 split=self.split, 
-                 trust_remote_code=True, 
-                 # streaming=False # Default
-            )
-
-            # Apply slicing *after* loading the split, if requested
+            # Existing loading logic based on self.split and self.config.DATASET_NAME
+            print(f"Loading dataset '{self.config.DATASET_NAME}' for split '{self.split}'...")
+            effective_split = self.split
             if self.config.LOAD_LOCAL_TEST_SAMPLE:
-                 sample_size = min(self.config.LOCAL_TEST_SAMPLE_SIZE, len(hf_dataset))
-                 print(f"Slicing dataset '{self.split}' to {sample_size} samples using .select()")
-                 self.dataset = hf_dataset.select(range(sample_size))
+                sample_size = self.config.LOCAL_TEST_SAMPLE_SIZE
+                print(f"Attempting to load only first {sample_size} samples for split '{self.split}' (will slice AFTER load)")
             else:
-                 print(f"Using full loaded split: '{self.split}'")
-                 self.dataset = hf_dataset # Use the full loaded split
+                print(f"Loading full split: '{self.split}'")
 
-        except Exception as e:
-            # Try fallback without split specification (for datasets without predefined splits)
-            print(f"ERROR loading dataset with split '{self.split}': {e}. Trying without split...")
             try:
-                hf_dataset = datasets.load_dataset(
-                     self.config.DATASET_NAME, 
-                     trust_remote_code=True,
-                     # streaming=False # Default
+                loaded_single_split = datasets.load_dataset(
+                    self.config.DATASET_NAME, 
+                    split=effective_split, 
+                    trust_remote_code=True,
                 )
-                # If it loaded a dict, try selecting the train split
-                if isinstance(hf_dataset, datasets.dataset_dict.DatasetDict) and 'train' in hf_dataset:
-                     print("Selecting 'train' split from loaded DatasetDict.")
-                     hf_dataset = hf_dataset['train']
-                elif isinstance(hf_dataset, datasets.dataset_dict.DatasetDict):
-                     first_split = next(iter(hf_dataset))
-                     print(f"Warning: 'train' split not found. Using first available split: '{first_split}'")
-                     hf_dataset = hf_dataset[first_split]
-                
-                # Apply slicing after fallback load
                 if self.config.LOAD_LOCAL_TEST_SAMPLE:
-                     sample_size = min(self.config.LOCAL_TEST_SAMPLE_SIZE, len(hf_dataset))
-                     print(f"Slicing dataset (after fallback) to {sample_size} samples using .select()")
-                     self.dataset = hf_dataset.select(range(sample_size))
+                    sample_size = min(self.config.LOCAL_TEST_SAMPLE_SIZE, len(loaded_single_split))
+                    print(f"Slicing dataset '{effective_split}' to {sample_size} samples using .select()")
+                    self.dataset = loaded_single_split.select(range(sample_size))
                 else:
-                     self.dataset = hf_dataset
-                     
-            except Exception as e2:
-                print(f"FATAL: Could not load dataset split '{self.split}' even after fallback: {e2}")
-                raise # Re-raise the exception
+                    self.dataset = loaded_single_split
 
-        print(f"Dataset loaded. Number of samples: {len(self.dataset)}")
+            except Exception as e:
+                print(f"ERROR loading dataset with specific split '{effective_split}': {e}. This should ideally be handled by create_dataloaders now.")
+                # Fallback logic in __init__ becomes less critical if create_dataloaders handles splits robustly.
+                # For safety, one might keep a simplified fallback or raise an error if hf_dataset_obj is None and loading fails.
+                raise RuntimeError(f"Failed to load dataset for split '{effective_split}' in MimiTTSDataset constructor and no hf_dataset_obj was provided: {e}")
+
+            print(f"Dataset for split '{self.split}' loaded. Number of samples: {len(self.dataset)}")
 
     def __len__(self):
         # Restore original __len__
@@ -121,8 +94,32 @@ class MimiTTSDataset(Dataset):
         
         # Apply the same processing as before
         # 1. Process Text
-        text = item[self.config.DATASET_TEXT_COLUMN]
-        input_ids, attention_mask = self.text_processor.process(text, phonemes=True)
+        text_to_process = None
+        is_phoneme = False
+
+        # Check for pre-computed phonemes first
+        if self.config.DATASET_PHONEMES_COLUMN and self.config.DATASET_PHONEMES_COLUMN in item:
+            phonemes_data = item[self.config.DATASET_PHONEMES_COLUMN]
+            if phonemes_data and isinstance(phonemes_data, str):
+                # print(f"DBG: Using pre-computed phonemes: {phonemes_data[:100]}...")
+                text_to_process = phonemes_data
+                is_phoneme = True
+            else:
+                print(f"Warning: Column '{self.config.DATASET_PHONEMES_COLUMN}' found but is empty or not a string. Falling back to raw text.")
+        
+        # If no valid pre-computed phonemes, use raw text
+        if text_to_process is None:
+            if self.config.DATASET_TEXT_COLUMN in item:
+                text_to_process = item[self.config.DATASET_TEXT_COLUMN]
+                # print(f"DBG: Using raw text: {text_to_process[:100]}...")
+                is_phoneme = False # Ensure this is false if we fall back to text
+            else:
+                raise ValueError(f"Neither '{self.config.DATASET_PHONEMES_COLUMN}' (valid) nor '{self.config.DATASET_TEXT_COLUMN}' found in dataset item: {item.keys()}")
+
+        if text_to_process is None:
+             raise ValueError("Text input for processor is None, this should not happen.")
+
+        input_ids, attention_mask = self.text_processor.process(text_to_process, is_phoneme_input=is_phoneme)
 
         # 2. Load and Process Audio
         audio_data = item[self.config.DATASET_AUDIO_COLUMN]
@@ -244,91 +241,115 @@ def collate_batch(batch):
 def create_dataloaders(config):
     """Creates train and validation dataloaders."""
     
-    train_dataset = MimiTTSDataset(split="train", config=config)
+    hf_train_dataset = None
+    hf_val_dataset = None
+
+    print(f"Loading Hugging Face dataset: {config.DATASET_NAME}")
+    try:
+        # Attempt to load all splits first
+        loaded_data = datasets.load_dataset(config.DATASET_NAME, trust_remote_code=True)
+        
+        if isinstance(loaded_data, datasets.DatasetDict):
+            if 'train' not in loaded_data:
+                raise ValueError(f"Dataset {config.DATASET_NAME} loaded as a DatasetDict but does not contain a 'train' split.")
+            hf_train_dataset = loaded_data['train']
+            
+            if 'validation' in loaded_data:
+                print("Found 'validation' split in the dataset.")
+                hf_val_dataset = loaded_data['validation']
+            elif 'test' in loaded_data: # Use 'test' as validation if 'validation' is not present
+                print("Found 'test' split in the dataset, using as validation.")
+                hf_val_dataset = loaded_data['test']
+            else:
+                print("No 'validation' or 'test' split found. Creating validation set from 'train' split.")
+                if len(hf_train_dataset) < 2: # Need at least 2 samples to split
+                    raise ValueError("Training dataset is too small to create a validation split.")
+                # Ensure test_size is less than 1.0 and greater than 0.0 if dataset is small
+                val_split_percentage = config.VALIDATION_SPLIT_PERCENTAGE
+                if len(hf_train_dataset) * val_split_percentage < 1:
+                    val_split_percentage = 1 / len(hf_train_dataset) # ensure at least 1 sample for validation
+                    print(f"Adjusted validation split percentage to {val_split_percentage:.4f} to get at least one sample.")
+                
+                split_datasets = hf_train_dataset.train_test_split(
+                    test_size=val_split_percentage, 
+                    shuffle=True, 
+                    seed=42 # for reproducibility
+                )
+                hf_train_dataset = split_datasets['train']
+                hf_val_dataset = split_datasets['test'] # train_test_split names the validation part 'test'
+                print(f"Created validation set with {len(hf_val_dataset)} samples.")
+        elif isinstance(loaded_data, datasets.Dataset):
+            # Loaded data is a single split, assume it's the training set
+            print("Loaded dataset as a single split. Assuming it is the training set and creating validation split.")
+            hf_train_dataset = loaded_data
+            if len(hf_train_dataset) < 2:
+                raise ValueError("Dataset is too small to create a validation split.")
+            val_split_percentage = config.VALIDATION_SPLIT_PERCENTAGE
+            if len(hf_train_dataset) * val_split_percentage < 1:
+                val_split_percentage = 1 / len(hf_train_dataset)
+                print(f"Adjusted validation split percentage to {val_split_percentage:.4f} to get at least one sample.")
+
+            split_datasets = hf_train_dataset.train_test_split(
+                test_size=val_split_percentage, 
+                shuffle=True, 
+                seed=42
+            )
+            hf_train_dataset = split_datasets['train']
+            hf_val_dataset = split_datasets['test']
+            print(f"Created validation set with {len(hf_val_dataset)} samples.")
+        else:
+            raise TypeError(f"Loaded dataset {config.DATASET_NAME} is of unexpected type: {type(loaded_data)}")
+
+    except Exception as e:
+        print(f"Error loading or splitting dataset {config.DATASET_NAME}: {e}")
+        raise
+
+    # Apply local test sample slicing if configured, *after* train/val split
+    if config.LOAD_LOCAL_TEST_SAMPLE:
+        train_sample_size = min(config.LOCAL_TEST_SAMPLE_SIZE, len(hf_train_dataset))
+        val_sample_size = min(config.LOCAL_TEST_SAMPLE_SIZE, len(hf_val_dataset)) # Apply to val set too
+        
+        print(f"Slicing training data to {train_sample_size} samples for local testing.")
+        hf_train_dataset = hf_train_dataset.select(range(train_sample_size))
+        if hf_val_dataset and len(hf_val_dataset) > 0:
+            print(f"Slicing validation data to {val_sample_size} samples for local testing.")
+            hf_val_dataset = hf_val_dataset.select(range(val_sample_size))
+        elif not hf_val_dataset:
+             print("Warning: No validation dataset to slice for local testing.")
+
+
+    train_dataset = MimiTTSDataset(config=config, split="train", hf_dataset_obj=hf_train_dataset)
     print(f"Train dataset size: {len(train_dataset)}")
 
-    # --- Validation Dataset --- 
     val_dataset = None
-    val_loader = None
-    potential_val_splits = ["validation", "test"]
-    loaded_val_split = None
-
-    for split_name in potential_val_splits:
-        try:
-            print(f"Attempting to load validation split: '{split_name}'")
-            val_dataset = MimiTTSDataset(split=split_name, config=config)
-            loaded_val_split = split_name
-            print(f"Successfully loaded validation split: '{loaded_val_split}'")
-            break
-        except Exception as e:
-            print(f"Could not load split '{split_name}': {e}. Trying next potential split.")
-            val_dataset = None
-            
-    # --- If no val split loaded, try splitting train set --- #
-    if val_dataset is None:
-        print("No dedicated validation split found. Attempting to split training set.")
-        if len(train_dataset) < 20: # Don't split very small datasets
-             print("Training dataset too small to split for validation.")
-        else:
-             try:
-                 # Use train_test_split for a 95/5 split (test_size=0.05)
-                 # Use shuffle=False to take the *last* 5% deterministically
-                 split_result = train_dataset.dataset.train_test_split(test_size=0.05, shuffle=False, seed=config.SEED)
-                 # IMPORTANT: We need to re-wrap these splits in our MimiTTSDataset class
-                 # This assumes train_dataset has access to the underlying HF dataset object via `.dataset`
-                 train_split_data = split_result['train']
-                 val_split_data = split_result['test']
-                 
-                 # Re-create the datasets using the split data
-                 # Need to pass the underlying dataset object to the constructor
-                 # Let's modify MimiTTSDataset to optionally accept a dataset object
-                 print(f"Splitting train set: {len(train_split_data)} train / {len(val_split_data)} validation samples.")
-                 train_dataset.dataset = train_split_data # Update the dataset object within the existing train_dataset instance
-                 val_dataset = MimiTTSDataset(split="validation_from_train", config=config) # Create new instance for validation
-                 val_dataset.dataset = val_split_data # Assign the split data to the new instance
-                 loaded_val_split = "train_split(5%)"
-                 print(f"Successfully created validation set from training data.")
-                 # Update train dataset size print
-                 print(f"New train dataset size: {len(train_dataset)}") 
-
-             except AttributeError:
-                 print("Warning: Dataset object does not have `.train_test_split()` method. Cannot automatically split train set.")
-             except Exception as e_split:
-                 print(f"Error attempting to split training set: {e_split}. Proceeding without validation set.")
-                 val_dataset = None # Ensure it remains None on error
-
-    # --- Collate Function --- 
-    collate_fn = collate_batch 
-
-    # --- Create DataLoaders --- 
-    effective_batch_size = config.BATCH_SIZE 
-    dataloader_shuffle = True # Shuffle training data
-    num_workers = config.NUM_DATALOADER_WORKERS if hasattr(config, 'NUM_DATALOADER_WORKERS') else 0
-    print(f"Using effective batch size: {effective_batch_size}, Shuffle: {dataloader_shuffle}, Workers: {num_workers}")
+    if hf_val_dataset and len(hf_val_dataset) > 0:
+        val_dataset = MimiTTSDataset(config=config, split="validation", hf_dataset_obj=hf_val_dataset)
+        print(f"Validation dataset size: {len(val_dataset)}")
+    else:
+        print("No validation dataset created or loaded.")
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=effective_batch_size,
-        shuffle=dataloader_shuffle, 
-        collate_fn=collate_fn, # Use custom collate_fn
-        num_workers=num_workers
+        batch_size=config.BATCH_SIZE,
+        collate_fn=collate_batch,
+        shuffle=True,
+        num_workers=config.NUM_WORKERS if hasattr(config, 'NUM_WORKERS') else 0,
+        pin_memory=config.PIN_MEMORY if hasattr(config, 'PIN_MEMORY') else False
     )
-    print(f"Train DataLoader created. Num batches: {len(train_loader)}")
 
+    val_loader = None
     if val_dataset:
-        print(f"Validation dataset size: {len(val_dataset)}")
-        # Use same settings for val loader, but no shuffling
         val_loader = DataLoader(
             val_dataset,
-            batch_size=effective_batch_size, 
-            shuffle=False, 
-            collate_fn=collate_fn, # Use custom collate_fn
-            num_workers=num_workers
+            batch_size=config.BATCH_SIZE, # Can use same or different batch size
+            collate_fn=collate_batch,
+            shuffle=False, # No need to shuffle validation data
+            num_workers=config.NUM_WORKERS if hasattr(config, 'NUM_WORKERS') else 0,
+            pin_memory=config.PIN_MEMORY if hasattr(config, 'PIN_MEMORY') else False
         )
-        print(f"Validation DataLoader created. Num batches: {len(val_loader)}")
+        print("Train and Validation DataLoaders created.")
     else:
-        print("Warning: No validation split found or loaded successfully. Skipping validation loader creation.")
-        # Keep val_loader as None
+        print("Train DataLoader created. No Validation DataLoader (validation set was empty or not created).")
 
     return train_loader, val_loader
 
