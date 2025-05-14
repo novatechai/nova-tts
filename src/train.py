@@ -170,8 +170,8 @@ def main():
     
     # --- 5. Scheduler (Optional) ---
     # TODO: Implement learning rate scheduler if desired -> IMPLEMENTED
-    scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=3, verbose=True)
-    print("Scheduler defined (ReduceLROnPlateau on validation loss).")
+    scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=3)
+    print(f"Learning rate scheduler: {scheduler.__class__.__name__}")
     
     # --- 6. Training Loop ---
     print("\nStarting Training Loop...")
