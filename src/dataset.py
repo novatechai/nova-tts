@@ -67,7 +67,8 @@ class MimiTTSDataset(Dataset):
                 loaded_single_split = datasets.load_dataset(
                     self.config.DATASET_NAME, 
                     split=effective_split,
-                    keep_in_memory=True
+                    keep_in_memory=True,
+                    try_from_hf_gcs=False
                 )
                 if self.config.LOAD_LOCAL_TEST_SAMPLE:
                     sample_size = min(self.config.LOCAL_TEST_SAMPLE_SIZE, len(loaded_single_split))
@@ -247,7 +248,7 @@ def create_dataloaders(config):
     print(f"Loading Hugging Face dataset: {config.DATASET_NAME}")
     try:
         # Attempt to load all splits first
-        loaded_data = datasets.load_dataset(config.DATASET_NAME, keep_in_memory=True)
+        loaded_data = datasets.load_dataset(config.DATASET_NAME, keep_in_memory=True, try_from_hf_gcs=False)
         
         if isinstance(loaded_data, datasets.DatasetDict):
             if 'train' not in loaded_data:
